@@ -2,8 +2,132 @@
 <html>
   <head>
     <meta charset="UTF-8">
+    <title>Engineer Scheduler</title>
+    <script src="https://live.zwidgets.com/js-sdk/1.5/ZohoEmbededAppSDK.min.js"></script>
+    <link rel="stylesheet" href="style.css">
   </head>
   <body>
-    <h2>This is a sample Widget built using Zoho Extension toolkit.</h2>
+    <div class="widget">
+
+      <!-- Header -->
+      <div class="header">
+        <div class="header-left">
+          <div class="header-icon">&#128188;</div>
+          <div>
+            <div class="header-title">Engineer Scheduler</div>
+            <div class="header-sub" id="headerSub">Initializing...</div>
+          </div>
+        </div>
+        <div class="header-badge" id="headerBadge">—</div>
+      </div>
+
+      <!-- Schedule Lookup -->
+      <div class="filters" style="background:var(--accent-light);border-color:var(--accent);">
+        <div class="filter-group full">
+          <label>Select Schedule <span class="req">*</span></label>
+          <select id="scheduleSelect">
+            <option value="">— Choose existing schedule —</option>
+          </select>
+        </div>
+        <div class="filter-group full">
+          <label>New Schedule Name</label>
+          <input type="text" id="newScheduleName" placeholder="Leave empty to use selected schedule, or type new name to create one">
+        </div>
+      </div>
+
+      <!-- Filters -->
+      <div class="filters">
+        <div class="filter-group">
+          <label>Date <span class="req">*</span></label>
+          <input type="date" id="filterDate">
+        </div>
+        <div class="filter-group">
+          <label>Start Time <span class="req">*</span></label>
+          <input type="time" id="filterStartTime">
+        </div>
+        <div class="filter-group">
+          <label>End Time <span class="req">*</span></label>
+          <input type="time" id="filterEndTime">
+        </div>
+        <div class="filter-group">
+          <label>Skill</label>
+          <select id="filterSkill">
+            <option value="">All Skills</option>
+          </select>
+        </div>
+        <button class="btn-filter" id="btnFilter">Find Available Engineers</button>
+      </div>
+
+      <!-- Engineers Table -->
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th style="width:40px">
+                <input type="checkbox" id="selectAll">
+              </th>
+              <th>Engineer</th>
+              <th>Skills</th>
+              <th>Position</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody id="engineersBody">
+            <tr><td class="empty" colspan="5">Set filters and click "Find Available Engineers"</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Selection bar -->
+      <div class="selection-bar" id="selectionBar" style="display:none;">
+        <span id="selectedCount">0 selected</span>
+        <span style="margin-left:auto;font-size:12px;opacity:0.8;" id="selectedNames"></span>
+      </div>
+
+      <!-- Assign Section -->
+      <div class="schedule-section" id="scheduleSection" style="display:none;">
+        <div class="section-title">Assign Selected Engineers</div>
+        <button class="btn-assign" id="btnAssign" disabled>Assign to Schedule</button>
+      </div>
+
+      <!-- Discover API Names -->
+      <div class="filters" style="background:#fff7ed;border-color:var(--yellow);">
+        <button class="btn-filter" id="btnDiscover" style="background:var(--yellow);">Discover API Names</button>
+        <span style="font-size:12px;color:var(--text-sub);align-self:center;">Click to log all module API names & fields to debug console</span>
+      </div>
+
+      <!-- Debug Console Toggle -->
+      <button class="console-toggle" id="consoleToggle">
+        <span class="arrow" id="consoleArrow">&#9654;</span>
+        Debug Console
+      </button>
+
+      <!-- Debug Console Panel -->
+      <div class="console-panel" id="consolePanel">
+        <div class="console-header">
+          <span class="dot red"></span>
+          <span class="dot yellow"></span>
+          <span class="dot green"></span>
+          <span>debug-output</span>
+          <button class="btn-clear-console" id="clearConsole">Clear</button>
+        </div>
+        <div class="console-body" id="consoleBody">
+          <div class="empty-state" id="emptyState">Waiting for events...</div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Toast -->
+    <div class="toast" id="toast"></div>
+
+    <!-- Loader -->
+    <div class="loader-overlay" id="loader" style="display:none;">
+      <div class="spinner"></div>
+      <div class="loader-text" id="loaderText">Loading...</div>
+    </div>
+
+    <script src="console.js"></script>
+    <script src="app.js"></script>
   </body>
 </html>
