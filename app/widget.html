@@ -84,10 +84,15 @@
         <span style="margin-left:auto;font-size:12px;opacity:0.8;" id="selectedNames"></span>
       </div>
 
-      <!-- Assign Section -->
+      <!-- Assign / Manage Section -->
       <div class="schedule-section" id="scheduleSection" style="display:none;">
-        <div class="section-title">Assign Selected Engineers</div>
-        <button class="btn-assign" id="btnAssign" disabled>Assign to Schedule</button>
+        <div class="section-title">Manage Schedule Engineers</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <button class="btn-assign" id="btnAssign" disabled>Assign to Schedule</button>
+          <button class="btn-assign" id="btnUnlink" style="background:var(--red);display:none;">Unlink Selected</button>
+          <button class="btn-assign" id="btnReschedule" style="background:var(--yellow);display:none;">Reschedule Selected</button>
+        </div>
+        <div style="margin-top:8px;font-size:12px;color:var(--text-sub);" id="manageHint"></div>
       </div>
 
       <!-- Discover API Names -->

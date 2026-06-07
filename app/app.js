@@ -23,6 +23,7 @@ const LINK_FIELD_ENGINEER = 'Engineers'; // lookup to Engineers in linking modul
 // State
 let allEngineers = [];
 let allSchedules = [];
+let allLinks = [];
 let skillOptions = [];
 let filteredEngineers = [];
 let selectedIds = new Set();
@@ -46,6 +47,8 @@ const dom = {
   selectedNames: $('selectedNames'),
   scheduleSec:   $('scheduleSection'),
   btnAssign:     $('btnAssign'),
+  btnUnlink:     $('btnUnlink'),
+  btnReschedule: $('btnReschedule'),
   toast:         $('toast'),
   loader:        $('loader'),
   loaderText:    $('loaderText')
@@ -89,6 +92,14 @@ function apiInsertRecord(entity, data, triggers) {
   });
 }
 
+function apiDeleteRecord(entity, recordId) {
+  return new Promise((resolve, reject) => {
+    var cfg = { Entity: entity, RecordID: recordId };
+    console.log('[API] deleteRecord', JSON.stringify(cfg));
+    ZOHO.CRM.API.deleteRecord(cfg).then(r => { console.log('[API] deleteRecord result', r); resolve(r); }).catch(e => { console.error('[API] deleteRecord error', e); reject(e); });
+  });
+}
+
 function apiUpdateRecord(entity, data, triggers) {
   return new Promise((resolve, reject) => {
     var cfg = { Entity: entity, APIData: data, Trigger: triggers||[] };
@@ -96,7 +107,6 @@ function apiUpdateRecord(entity, data, triggers) {
     ZOHO.CRM.API.updateRecord(cfg).then(r => { console.log('[API] updateRecord result', r); resolve(r); }).catch(e => { console.error('[API] updateRecord error', e); reject(e); });
   });
 }
-
 
 // ─── Load data ────────────────────────────────────────────
 
@@ -151,6 +161,135 @@ async function loadSchedules() {
   }
 }
 
+// ─── Load Links ─────────────────────────────────────────
+async function loadLinks() {
+  console.log('[APP] Loading linking records...');
+  try {
+    var data = await apiGetAllRecords(LINKING_MODULE);
+    allLinks = data||[];
+    console.log('[APP] Links loaded:', allLinks.length);
+    log('🔗 Links Loaded', allLinks.length+' linking records', 'info');
+  } catch(e) {
+    console.error('[APP] loadLinks error:', e);
+    allLinks = [];
+    log('⚠️ Links Load Error', e.message, 'warn');
+  }
+}
+
+// Get linked engineers for a specific schedule
+function getLinkedEngineerIds(scheduleId) {
+  var ids = [];
+  allLinks.forEach(function(link) {
+    var sched = link[LINK_FIELD_SCHEDULE];
+    var eng = link[LINK_FIELD_ENGINEER];
+    var schedId = typeof sched === 'object' ? String(sched.id) : String(sched);
+    var engId = typeof eng === 'object' ? String(eng.id) : String(eng);
+    if (schedId === String(scheduleId)) {
+      ids.push({ engineerId: engId, linkId: link.id });
+    }
+  });
+  return ids;
+}
+
+// Get linked schedule id for an engineer
+function getLinkedScheduleIds(engineerId) {
+  var ids = [];
+  allLinks.forEach(function(link) {
+    var sched = link[LINK_FIELD_SCHEDULE];
+    var eng = link[LINK_FIELD_ENGINEER];
+    var engId = typeof eng === 'object' ? String(eng.id) : String(eng);
+    var schedId = typeof sched === 'object' ? String(sched.id) : String(sched);
+    if (engId === String(engineerId)) {
+      ids.push(schedId);
+    }
+  });
+  return ids;
+}
+
+// ─── Unlink Engineers ────────────────────────────────────
+async function unlinkEngineers() {
+  if (selectedIds.size === 0) { showToast('No engineers selected', 'error'); return; }
+
+  var schedId = dom.scheduleSelect.value;
+  if (!schedId) { showToast('Select a schedule first', 'error'); return; }
+
+  var engineerIds = Array.from(selectedIds);
+  var linked = getLinkedEngineerIds(schedId);
+  var linkIds = [];
+  engineerIds.forEach(function(eid) {
+    linked.forEach(function(l) {
+      if (String(l.engineerId) === String(eid)) linkIds.push(l.linkId);
+    });
+  });
+
+  if (linkIds.length === 0) { showToast('No matching links found to unlink', 'error'); return; }
+
+  if (!confirm('Unlink ' + linkIds.length + ' engineer(s) from this schedule?')) return;
+
+  showLoader('Unlinking...');
+  log('🔗 Unlinking', {scheduleId: schedId, count: linkIds.length}, 'info');
+
+  var unlinkCount = 0;
+  for (var i = 0; i < linkIds.length; i++) {
+    try {
+      await apiDeleteRecord(LINKING_MODULE, linkIds[i]);
+      unlinkCount++;
+      log('🔓 Unlinked', 'Link ' + linkIds[i], 'success');
+    } catch(e) {
+      console.error('[APP] Unlink error:', e);
+      log('❌ Unlink Error', linkIds[i] + ': ' + e.message, 'error');
+    }
+  }
+
+  showToast(unlinkCount + ' link(s) removed', 'success');
+  await loadLinks();
+  await loadSchedules();
+  selectedIds.clear();
+  updateSelectionUI();
+  await findAvailableEngineers();
+  hideLoader();
+}
+
+// ─── Reschedule Engineers ────────────────────────────────
+async function rescheduleEngineers() {
+  if (selectedIds.size === 0) { showToast('No engineers selected', 'error'); return; }
+
+  var currentSchedId = dom.scheduleSelect.value;
+  if (!currentSchedId) { showToast('Select a schedule first', 'error'); return; }
+
+  var newDate = prompt('Enter new date (YYYY-MM-DD):');
+  if (!newDate) return;
+  var newTime = prompt('Enter new end time (HH:MM):');
+  if (!newTime) return;
+
+  showLoader('Rescheduling...');
+  log('🔄 Reschedule', {from: currentSchedId, date: newDate, endTime: newTime}, 'info');
+
+  // Update the current schedule's date/time
+  try {
+    await apiUpdateRecord(MODULES.SCHEDULES, {
+      id: currentSchedId,
+      Date: newDate,
+      End_time: newDate + 'T' + newTime + ':00'
+    });
+    log('✅ Schedule Updated', 'Date/Time updated', 'success');
+  } catch(e) {
+    console.error('[APP] Reschedule update error:', e);
+    log('❌ Reschedule Error', e.message, 'error');
+    hideLoader();
+    return;
+  }
+
+  showToast('Schedule date/time updated', 'success');
+  await loadSchedules();
+  await loadLinks();
+  dom.scheduleSelect.value = currentSchedId;
+  selectedIds.clear();
+  updateSelectionUI();
+  await findAvailableEngineers();
+  hideLoader();
+}
+
 // ─── Availability ─────────────────────────────────────────
 
 function isEngineerAvailable(engId, dateStr, startTime, endTime) {
@@ -159,24 +298,36 @@ function isEngineerAvailable(engId, dateStr, startTime, endTime) {
   if (isNaN(fS.getTime())||isNaN(fE.getTime())) return false;
   if (fE<=fS) return false;
 
-  for (var i=0;i<allSchedules.length;i++) {
-    var s = allSchedules[i];
-    // Skip the currently selected schedule (we're editing it)
-    if (s.id === activeScheduleId) continue;
-    var sd = s[FIELD.SCHEDULES.DATE];
-    var se = s[FIELD.SCHEDULES.END_TIME];
+  // Check linking records to see if engineer is assigned to any schedule
+  // that overlaps with the requested time window
+  for (var i = 0; i < allLinks.length; i++) {
+    var link = allLinks[i];
+    var sched = link[LINK_FIELD_SCHEDULE];
+    var eng = link[LINK_FIELD_ENGINEER];
+    var linkSchedId = typeof sched === 'object' ? String(sched.id) : String(sched);
+    var linkEngId = typeof eng === 'object' ? String(eng.id) : String(eng);
+
+    if (linkEngId !== String(engId)) continue;
+    if (linkSchedId === activeScheduleId) continue; // skip current schedule
+
+    // Find the schedule details
+    var linkedSched = null;
+    for (var j = 0; j < allSchedules.length; j++) {
+      if (allSchedules[j].id === linkSchedId) {
+        linkedSched = allSchedules[j];
+        break;
+      }
+    }
+    if (!linkedSched) continue;
+
+    var sd = linkedSched[FIELD.SCHEDULES.DATE];
+    var se = linkedSched[FIELD.SCHEDULES.END_TIME];
     if (sd !== dateStr || !se) continue;
     var sEnd = new Date(se);
     if (isNaN(sEnd.getTime())) continue;
     var overlap = fS < sEnd && fE > new Date(dateStr+'T00:00:00');
     if (overlap) {
-      var engs = s[FIELD.SCHEDULES.ENGINEERS];
-      if (engs) {
-        var ids = [];
-        if (Array.isArray(engs)) ids = engs.map(function(e){ return typeof e==='object' ? String(e.id) : String(e); });
-        else if (typeof engs==='string') ids = [engs];
-        if (ids.indexOf(String(engId))!==-1) return false;
-      }
+      return false; // Engineer is assigned to another schedule on the same date/time
     }
   }
   return true;
@@ -252,22 +403,19 @@ async function findAvailableEngineers() {
 
   showLoader('Checking availability...');
   try {
-    // Get already-assigned engineers in the selected schedule
+    // Get already-assigned engineers in the selected schedule from linking records
     var alreadyAssignedIds = [];
     var schedId = dom.scheduleSelect.value;
-    var selectedSched = null;
     if (schedId) {
+      var linked = getLinkedEngineerIds(schedId);
+      alreadyAssignedIds = linked.map(function(l) { return l.engineerId; });
+
+      // Pre-fill filter date from schedule
       for (var i=0;i<allSchedules.length;i++) {
-        if (allSchedules[i].id===schedId) { selectedSched=allSchedules[i]; break; }
-      }
-      if (selectedSched) {
-        var engs = selectedSched[FIELD.SCHEDULES.ENGINEERS];
-        if (engs) {
-          if (Array.isArray(engs)) alreadyAssignedIds = engs.map(function(e){ return typeof e==='object'?String(e.id):String(e); });
-          else if (typeof engs==='string') alreadyAssignedIds = [engs];
+        if (allSchedules[i].id===schedId) {
+          if (allSchedules[i][FIELD.SCHEDULES.DATE]) dom.filterDate.value = allSchedules[i][FIELD.SCHEDULES.DATE];
+          break;
         }
-        // Pre-fill filter date from schedule
-        if (selectedSched[FIELD.SCHEDULES.DATE]) dom.filterDate.value = selectedSched[FIELD.SCHEDULES.DATE];
       }
     }
 
@@ -487,6 +635,8 @@ function bindEvents() {
   });
 
   dom.btnAssign.addEventListener('click', assignSchedule);
+  dom.btnUnlink.addEventListener('click', unlinkEngineers);
+  dom.btnReschedule.addEventListener('click', rescheduleEngineers);
 
   // Discover API Names button
   var btnDiscover = $('btnDiscover');
@@ -569,10 +719,10 @@ ZOHO.embeddedApp.on("PageLoad", async function(data) {
   try {
     var today = new Date().toISOString().split('T')[0];
     dom.filterDate.value = today;
-    await Promise.all([loadEngineers(), loadSchedules()]);
+    await Promise.all([loadEngineers(), loadSchedules(), loadLinks()]);
     bindEvents();
-    console.log('[APP] Init complete. Engineers:', allEngineers.length, 'Schedules:', allSchedules.length);
-    log('✅ Ready', {engineers:allEngineers.length, schedules:allSchedules.length}, 'success');
+    console.log('[APP] Init complete. Engineers:', allEngineers.length, 'Schedules:', allSchedules.length, 'Links:', allLinks.length);
+    log('✅ Ready', {engineers:allEngineers.length, schedules:allSchedules.length, links:allLinks.length}, 'success');
     showToast('Ready! Select schedule and find available engineers.', 'info');
   } catch(e) {
     console.error('[APP] Init error:', e);
