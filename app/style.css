@@ -172,6 +172,8 @@ tbody tr:last-child td { border-bottom: none; }
 
 tbody tr:hover { background: var(--accent-light); }
 tbody tr.selected { background: var(--accent-light); }
+tbody tr.unavailable { background: #fef2f2; }
+tbody tr.unavailable:hover { background: #fecaca; }
 
 .empty {
   text-align: center;

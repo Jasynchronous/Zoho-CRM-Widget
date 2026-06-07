@@ -48,6 +48,7 @@ const dom = {
   scheduleSec:   $('scheduleSection'),
   btnAssign:     $('btnAssign'),
   btnUnlink:     $('btnUnlink'),
+  showAll:       $('showAll'),
   btnReschedule: $('btnReschedule'),
   toast:         $('toast'),
   loader:        $('loader'),
@@ -335,22 +336,25 @@ function isEngineerAvailable(engId, dateStr, startTime, endTime) {
 
 // ─── Render ───────────────────────────────────────────────
 
-function renderTable(engineers) {
+function renderTable(engineers, showAvailability) {
   var tb = dom.tbody;
   if (!engineers||engineers.length===0) {
-    tb.innerHTML = '<tr><td class="empty" colspan="5">No available engineers found.</td></tr>';
-    dom.headerBadge.textContent = '0 available';
+    tb.innerHTML = '<tr><td class="empty" colspan="6">No engineers found.</td></tr>';
+    dom.headerBadge.textContent = '0 shown';
     return;
   }
   var html = '';
+  var availCount = 0, unavailCount = 0;
   for (var i=0;i<engineers.length;i++) {
     var e = engineers[i];
     var id = e.id;
     var name = e[FIELD.ENGINEERS.NAME]||'Unnamed';
     var skills = e[FIELD.ENGINEERS.SKILLS]||'';
     var pos = e[FIELD.ENGINEERS.POSITION]||'-';
-    var status = e[FIELD.ENGINEERS.STATUS]||'-';
     var checked = selectedIds.has(id)?'checked':'';
+    var isAvail = e._available;
+    if (isAvail) availCount++; else unavailCount++;
+
     var skillTags = '';
     if (skills) {
       skillTags = skills.split(/[;,|]/).map(function(s){return s.trim();}).filter(Boolean).map(function(s){
@@ -358,16 +362,51 @@ function renderTable(engineers) {
       }).join('');
     }
     if (!skillTags) skillTags = '<span class="skill-tag empty-skill">—</span>';
-    html += '<tr class="'+(checked?'selected':'')+'" data-id="'+id+'">'+
+
+    var availBadge = isAvail
+      ? '<span style="color:var(--green);font-weight:600;font-size:12px;">✓ Available</span>'
+      : '<span style="color:var(--red);font-weight:600;font-size:12px;">✗ Assigned</span>';
+
+    var rowClass = checked?'selected':(isAvail?'':'unavailable');
+    html += '<tr class="'+rowClass+'" data-id="'+id+'" data-available="'+(isAvail?1:0)+'">'+
       '<td><input type="checkbox" class="eng-check" data-id="'+id+'" '+checked+'></td>'+
       '<td><strong>'+escapeHtml(name)+'</strong></td>'+
       '<td>'+skillTags+'</td>'+
       '<td>'+escapeHtml(pos)+'</td>'+
-      '<td>'+escapeHtml(status)+'</td>'+
+      '<td>'+availBadge+'</td>'+
     '</tr>';
   }
   tb.innerHTML = html;
-  dom.headerBadge.textContent = engineers.length+' available';
+
+  if (showAvailability) {
+    dom.headerBadge.textContent = availCount+' avail / '+unavailCount+' busy';
+  } else {
+    dom.headerBadge.textContent = availCount+' available';
+  }
+}
+
+function updateManageButtons() {
+  var hasSelected = selectedIds.size > 0;
+  var showAllChecked = dom.showAll && dom.showAll.checked;
+
+  // Show both assign and unlink/reschedule buttons when in showAll mode
+  if (hasSelected && showAllChecked) {
+    dom.btnAssign.style.display = 'inline-block';
+    dom.btnUnlink.style.display = 'inline-block';
+    dom.btnReschedule.style.display = 'inline-block';
+    dom.btnAssign.disabled = false;
+  } else if (hasSelected) {
+    // Only assign when showing available
+    dom.btnAssign.style.display = 'inline-block';
+    dom.btnUnlink.style.display = 'inline-block';
+    dom.btnReschedule.style.display = 'inline-block';
+    dom.btnAssign.disabled = false;
+  } else {
+    dom.btnAssign.style.display = 'inline-block';
+    dom.btnUnlink.style.display = 'none';
+    dom.btnReschedule.style.display = 'none';
+    dom.btnAssign.disabled = true;
+  }
 }
 
 function updateSelectionUI() {
@@ -376,6 +415,8 @@ function updateSelectionUI() {
     dom.selectionBar.style.display='none';
     dom.scheduleSec.style.display='none';
     dom.btnAssign.disabled=true;
+    dom.btnUnlink.style.display='none';
+    dom.btnReschedule.style.display='none';
     return;
   }
   var selEngs = filteredEngineers.filter(function(e){ return selectedIds.has(e.id); });
@@ -385,6 +426,7 @@ function updateSelectionUI() {
   dom.selectionBar.style.display='flex';
   dom.scheduleSec.style.display='block';
   dom.btnAssign.disabled = false;
+  updateManageButtons();
 }
 
 // ─── Find Available ───────────────────────────────────────
@@ -394,34 +436,38 @@ async function findAvailableEngineers() {
   var startTime = dom.filterStart.value;
   var endTime = dom.filterEnd.value;
   var skillFilter = dom.filterSkill.value;
+  var showAllChecked = dom.showAll && dom.showAll.checked;
 
-  console.log('[APP] Finding available:', {date,start:startTime,end:endTime,skill:skillFilter});
-  log('🔍 Finding Available', {date, timeRange:startTime+'-'+endTime, skill:skillFilter||'any'}, 'info');
+  if (!showAllChecked) {
+    if (!date||!startTime||!endTime) { showToast('Select Date, Start and End Time','error'); return; }
+    if (new Date(date+'T'+endTime+':00')<=new Date(date+'T'+startTime+':00')) { showToast('End must be after Start','error'); return; }
+  }
 
-  if (!date||!startTime||!endTime) { showToast('Select Date, Start and End Time','error'); return; }
-  if (new Date(date+'T'+endTime+':00')<=new Date(date+'T'+startTime+':00')) { showToast('End must be after Start','error'); return; }
+  log('🔍 Finding Engineers', {date: date, timeRange: startTime+'-'+endTime, skill: skillFilter||'any', showAll: showAllChecked}, 'info');
+  showLoader('Loading...');
 
-  showLoader('Checking availability...');
   try {
-    // Get already-assigned engineers in the selected schedule from linking records
+    // Get already-assigned engineers from linking records for current schedule
     var alreadyAssignedIds = [];
     var schedId = dom.scheduleSelect.value;
     if (schedId) {
       var linked = getLinkedEngineerIds(schedId);
       alreadyAssignedIds = linked.map(function(l) { return l.engineerId; });
-
       // Pre-fill filter date from schedule
-      for (var i=0;i<allSchedules.length;i++) {
-        if (allSchedules[i].id===schedId) {
-          if (allSchedules[i][FIELD.SCHEDULES.DATE]) dom.filterDate.value = allSchedules[i][FIELD.SCHEDULES.DATE];
-          break;
+      if (!showAllChecked) {
+        for (var i=0;i<allSchedules.length;i++) {
+          if (allSchedules[i].id===schedId) {
+            if (allSchedules[i][FIELD.SCHEDULES.DATE]) dom.filterDate.value = allSchedules[i][FIELD.SCHEDULES.DATE];
+            break;
+          }
         }
       }
     }
 
-    // Candidates: not already assigned to this schedule
-    var candidates = allEngineers.filter(function(e){ return alreadyAssignedIds.indexOf(String(e.id))===-1; });
+    // Start with all engineers
+    var candidates = allEngineers.slice();
 
+    // Filter by skill
     if (skillFilter) {
       candidates = candidates.filter(function(e){
         var sk = e[FIELD.ENGINEERS.SKILLS]||'';
@@ -429,23 +475,48 @@ async function findAvailableEngineers() {
       });
     }
 
-    var available = [];
-    for (var i=0;i<candidates.length;i++) {
-      if (isEngineerAvailable(candidates[i].id, date, startTime, endTime)) {
-        available.push(candidates[i]);
-      }
-    }
+    if (showAllChecked) {
+      // Show ALL engineers with availability status
+      var enriched = candidates.map(function(e) {
+        var avail = isEngineerAvailable(e.id, date||'', startTime||'', endTime||'');
+        return Object.assign({}, e, { _available: avail });
+      });
 
-    filteredEngineers = available;
-    dom.headerSub.textContent = date+': '+(alreadyAssignedIds.length>0?'('+alreadyAssignedIds.length+' already assigned) ':'')+available.length+' available';
-    selectedIds.clear();
-    updateSelectionUI();
-    renderTable(available);
-    log('✅ Available', available.length+' engineers available', available.length>0?'success':'warn');
+      // Sort: available first, then unavailable
+      enriched.sort(function(a,b){ return (b._available?1:0)-(a._available?1:0); });
+
+      filteredEngineers = enriched;
+      selectedIds.clear();
+      updateSelectionUI();
+      renderTable(enriched, true);
+
+      var availN = enriched.filter(function(e){return e._available;}).length;
+      dom.headerSub.textContent = 'Showing all: '+availN+' available, '+(enriched.length-availN)+' assigned';
+      log('📋 Show All', enriched.length+' engineers shown', 'info');
+
+    } else {
+      // Show only available engineers (not assigned to current schedule)
+      var notAssigned = candidates.filter(function(e){ return alreadyAssignedIds.indexOf(String(e.id))===-1; });
+
+      var available = [];
+      for (var i=0;i<notAssigned.length;i++) {
+        if (isEngineerAvailable(notAssigned[i].id, date, startTime, endTime)) {
+          notAssigned[i]._available = true;
+          available.push(notAssigned[i]);
+        }
+      }
+
+      filteredEngineers = available;
+      selectedIds.clear();
+      updateSelectionUI();
+      renderTable(available);
+      dom.headerSub.textContent = date+': '+(alreadyAssignedIds.length>0?'('+alreadyAssignedIds.length+' already assigned) ':'')+available.length+' available';
+      log('✅ Available', available.length+' engineers available', available.length>0?'success':'warn');
+    }
 
   } catch(e) {
     console.error('[APP] findAvailable error:', e);
-    log('❌ Availability Error', e.message, 'error');
+    log('❌ Error', e.message, 'error');
     showToast('Error: '+e.message, 'error');
   } finally { hideLoader(); }
 }
@@ -638,6 +709,13 @@ function bindEvents() {
   dom.btnUnlink.addEventListener('click', unlinkEngineers);
   dom.btnReschedule.addEventListener('click', rescheduleEngineers);
 
+  // Show All checkbox
+  if (dom.showAll) {
+    dom.showAll.addEventListener('change', function() {
+      findAvailableEngineers();
+    });
+  }
+
   // Discover API Names button
   var btnDiscover = $('btnDiscover');
   if (btnDiscover) {
@@ -711,6 +789,26 @@ function bindEvents() {
   }
 }
 
+// ─── Auto-Refresh ─────────────────────────────────────────
+
+let autoRefreshInterval = null;
+
+function startAutoRefresh() {
+  if (autoRefreshInterval) clearInterval(autoRefreshInterval);
+  autoRefreshInterval = setInterval(async function() {
+    try {
+      await loadLinks();
+      // Re-render if "Show All" is checked
+      if (dom.showAll && dom.showAll.checked) {
+        await findAvailableEngineers();
+        log('🔄 Auto-refreshed table', '', 'info');
+      }
+    } catch(e) {
+      console.log('[APP] Auto-refresh skipped:', e.message);
+    }
+  }, 30000); // every 30 seconds
+}
+
 // ─── Init ─────────────────────────────────────────────────
 
 ZOHO.embeddedApp.on("PageLoad", async function(data) {
@@ -721,9 +819,10 @@ ZOHO.embeddedApp.on("PageLoad", async function(data) {
     dom.filterDate.value = today;
     await Promise.all([loadEngineers(), loadSchedules(), loadLinks()]);
     bindEvents();
+    startAutoRefresh();
     console.log('[APP] Init complete. Engineers:', allEngineers.length, 'Schedules:', allSchedules.length, 'Links:', allLinks.length);
     log('✅ Ready', {engineers:allEngineers.length, schedules:allSchedules.length, links:allLinks.length}, 'success');
-    showToast('Ready! Select schedule and find available engineers.', 'info');
+    showToast('Ready! Table auto-refreshes every 30s.', 'info');
   } catch(e) {
     console.error('[APP] Init error:', e);
     log('❌ Init Error', e.message, 'error');
