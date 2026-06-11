@@ -127,7 +127,7 @@ async function loadEngineers() {
     });
     skillOptions = Array.from(ss).sort();
     var sel = dom.filterSkill;
-    sel.innerHTML = '<option value="">All Skills</option>';
+    sel.innerHTML = '<option value="">All Skills</option><option value="__none__">No Skill</option>';
     skillOptions.forEach(function(s){ var o=document.createElement('option'); o.value=s; o.textContent=s; sel.appendChild(o); });
     console.log('[APP] Engineers loaded:', allEngineers.length);
     log('✅ Engineers Loaded', allEngineers.length+' engineers', 'success');
@@ -294,10 +294,12 @@ async function rescheduleEngineers() {
 // ─── Availability ─────────────────────────────────────────
 
 function isEngineerAvailable(engId, dateStr, startTime, endTime) {
+  // If no date/time provided, engineer is considered available
+  if (!dateStr || !startTime || !endTime) return true;
   var fS = new Date(dateStr+'T'+startTime+':00');
   var fE = new Date(dateStr+'T'+endTime+':00');
-  if (isNaN(fS.getTime())||isNaN(fE.getTime())) return false;
-  if (fE<=fS) return false;
+  if (isNaN(fS.getTime())||isNaN(fE.getTime())) return true;
+  if (fE<=fS) return true;
 
   // Check linking records to see if engineer is assigned to any schedule
   // that overlaps with the requested time window
@@ -367,9 +369,10 @@ function renderTable(engineers, showAvailability) {
       ? '<span style="color:var(--green);font-weight:600;font-size:12px;">✓ Available</span>'
       : '<span style="color:var(--red);font-weight:600;font-size:12px;">✗ Assigned</span>';
 
+    var disabled = e._assignedToCurrent ? 'disabled' : '';
     var rowClass = checked?'selected':(isAvail?'':'unavailable');
     html += '<tr class="'+rowClass+'" data-id="'+id+'" data-available="'+(isAvail?1:0)+'">'+
-      '<td><input type="checkbox" class="eng-check" data-id="'+id+'" '+checked+'></td>'+
+      '<td><input type="checkbox" class="eng-check" data-id="'+id+'" '+checked+' '+disabled+'></td>'+
       '<td><strong>'+escapeHtml(name)+'</strong></td>'+
       '<td>'+skillTags+'</td>'+
       '<td>'+escapeHtml(pos)+'</td>'+
@@ -439,8 +442,10 @@ async function findAvailableEngineers() {
   var showAllChecked = dom.showAll && dom.showAll.checked;
 
   if (!showAllChecked) {
-    if (!date||!startTime||!endTime) { showToast('Select Date, Start and End Time','error'); return; }
-    if (new Date(date+'T'+endTime+':00')<=new Date(date+'T'+startTime+':00')) { showToast('End must be after Start','error'); return; }
+    // Only validate time range if date/time values are provided
+    if (date && startTime && endTime) {
+      if (new Date(date+'T'+endTime+':00')<=new Date(date+'T'+startTime+':00')) { showToast('End must be after Start','error'); return; }
+    }
   }
 
   log('🔍 Finding Engineers', {date: date, timeRange: startTime+'-'+endTime, skill: skillFilter||'any', showAll: showAllChecked}, 'info');
@@ -469,17 +474,26 @@ async function findAvailableEngineers() {
 
     // Filter by skill
     if (skillFilter) {
-      candidates = candidates.filter(function(e){
-        var sk = e[FIELD.ENGINEERS.SKILLS]||'';
-        return sk.split(/[;,|]/).map(function(s){return s.trim().toLowerCase();}).filter(Boolean).indexOf(skillFilter.toLowerCase())!==-1;
-      });
+      if (skillFilter === '__none__') {
+        candidates = candidates.filter(function(e){
+          var sk = e[FIELD.ENGINEERS.SKILLS]||'';
+          return !sk.trim();
+        });
+      } else {
+        candidates = candidates.filter(function(e){
+          var sk = e[FIELD.ENGINEERS.SKILLS]||'';
+          return sk.split(/[;,|]/).map(function(s){return s.trim().toLowerCase();}).filter(Boolean).indexOf(skillFilter.toLowerCase())!==-1;
+        });
+      }
     }
 
     if (showAllChecked) {
       // Show ALL engineers with availability status
       var enriched = candidates.map(function(e) {
-        var avail = isEngineerAvailable(e.id, date||'', startTime||'', endTime||'');
-        return Object.assign({}, e, { _available: avail });
+        // Engineers assigned to selected schedule are unavailable and cannot be selected
+        var assignedToCurrent = schedId && alreadyAssignedIds.indexOf(String(e.id)) !== -1;
+        var avail = assignedToCurrent ? false : isEngineerAvailable(e.id, date||'', startTime||'', endTime||'');
+        return Object.assign({}, e, { _available: avail, _assignedToCurrent: assignedToCurrent });
       });
 
       // Sort: available first, then unavailable
@@ -499,8 +513,10 @@ async function findAvailableEngineers() {
       var notAssigned = candidates.filter(function(e){ return alreadyAssignedIds.indexOf(String(e.id))===-1; });
 
       var available = [];
+      var hasTimeFilter = date && startTime && endTime;
       for (var i=0;i<notAssigned.length;i++) {
-        if (isEngineerAvailable(notAssigned[i].id, date, startTime, endTime)) {
+        var isAvail = hasTimeFilter ? isEngineerAvailable(notAssigned[i].id, date, startTime, endTime) : true;
+        if (isAvail) {
           notAssigned[i]._available = true;
           available.push(notAssigned[i]);
         }
@@ -510,7 +526,7 @@ async function findAvailableEngineers() {
       selectedIds.clear();
       updateSelectionUI();
       renderTable(available);
-      dom.headerSub.textContent = date+': '+(alreadyAssignedIds.length>0?'('+alreadyAssignedIds.length+' already assigned) ':'')+available.length+' available';
+      dom.headerSub.textContent = (date ? date+': ' : '')+(alreadyAssignedIds.length>0?'('+alreadyAssignedIds.length+' already assigned) ':'')+available.length+' available';
       log('✅ Available', available.length+' engineers available', available.length>0?'success':'warn');
     }
 
@@ -644,7 +660,8 @@ async function assignSchedule() {
       showToast('Failed to link any engineers to schedule', 'error');
     }
 
-    // Refresh
+    // Refresh - reload links first so availability check uses latest data
+    await loadLinks();
     await loadSchedules();
 
     // Select the schedule in dropdown
@@ -668,7 +685,16 @@ async function assignSchedule() {
 // ─── Events ───────────────────────────────────────────────
 
 function bindEvents() {
+  // Auto-search on any filter change
+  function autoFind() { findAvailableEngineers(); }
+
   dom.btnFilter.addEventListener('click', findAvailableEngineers);
+
+  // Auto-search when schedule, skill, date, or time changes
+  dom.filterSkill.addEventListener('change', autoFind);
+  dom.filterDate.addEventListener('change', autoFind);
+  dom.filterStart.addEventListener('change', autoFind);
+  dom.filterEnd.addEventListener('change', autoFind);
 
   // Schedule select → show already assigned engineers count
   dom.scheduleSelect.addEventListener('change', function() {
@@ -684,6 +710,7 @@ function bindEvents() {
         }
       }
     }
+    autoFind();
   });
 
   // Checkbox delegation
