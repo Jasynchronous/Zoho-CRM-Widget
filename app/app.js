@@ -50,6 +50,13 @@ const dom = {
   btnUnlink:     $('btnUnlink'),
   showAll:       $('showAll'),
   btnReschedule: $('btnReschedule'),
+  rescheduleModal: $('rescheduleModal'),
+  rescheduleDate: $('rescheduleDate'),
+  rescheduleTime: $('rescheduleTime'),
+  rescheduleSelect: $('rescheduleSelect'),
+  rescheduleName: $('rescheduleName'),
+  rescheduleCancel: $('rescheduleCancel'),
+  rescheduleConfirm: $('rescheduleConfirm'),
   toast:         $('toast'),
   loader:        $('loader'),
   loaderText:    $('loaderText')
@@ -251,44 +258,147 @@ async function unlinkEngineers() {
   hideLoader();
 }
 
-// ─── Reschedule Engineers ────────────────────────────────
-async function rescheduleEngineers() {
+// ─── Reschedule (Move) Engineers ─────────────────────────
+
+function showRescheduleModal() {
   if (selectedIds.size === 0) { showToast('No engineers selected', 'error'); return; }
 
   var currentSchedId = dom.scheduleSelect.value;
   if (!currentSchedId) { showToast('Select a schedule first', 'error'); return; }
 
-  var newDate = prompt('Enter new date (YYYY-MM-DD):');
-  if (!newDate) return;
-  var newTime = prompt('Enter new end time (HH:MM):');
-  if (!newTime) return;
+  // Reset modal inputs
+  dom.rescheduleSelect.value = '';
+  dom.rescheduleName.value = '';
+  dom.rescheduleDate.value = '';
+  dom.rescheduleTime.value = '';
 
-  showLoader('Rescheduling...');
-  log('🔄 Reschedule', {from: currentSchedId, date: newDate, endTime: newTime}, 'info');
+  // Populate existing schedule dropdown (exclude current schedule)
+  var sel = dom.rescheduleSelect;
+  sel.innerHTML = '<option value="">— Choose schedule —</option>';
+  allSchedules.forEach(function(s) {
+    if (String(s.id) !== String(currentSchedId)) {
+      var o = document.createElement('option');
+      o.value = s.id;
+      o.textContent = (s[FIELD.SCHEDULES.NAME]||'Unnamed')+' ('+(s[FIELD.SCHEDULES.DATE]||'no date')+')';
+      sel.appendChild(o);
+    }
+  });
 
-  // Update the current schedule's date/time
-  try {
-    await apiUpdateRecord(MODULES.SCHEDULES, {
-      id: currentSchedId,
-      Date: newDate,
-      End_time: newDate + 'T' + newTime + ':00'
+  dom.rescheduleModal.style.display = 'flex';
+}
+
+async function confirmReschedule() {
+  var targetSchedId = dom.rescheduleSelect.value;
+  var newSchedName = dom.rescheduleName.value.trim();
+  var newDate = dom.rescheduleDate.value;
+  var newTime = dom.rescheduleTime.value;
+
+  // Determine target: existing or new schedule
+  var isNew = false;
+  if (newSchedName) {
+    isNew = true;
+    if (!newDate || !newTime) { showToast('Date and End Time required for new schedule', 'error'); return; }
+  } else if (targetSchedId) {
+    isNew = false;
+  } else {
+    showToast('Select an existing schedule or enter a name for a new one', 'error');
+    return;
+  }
+
+  dom.rescheduleModal.style.display = 'none';
+  showLoader('Moving engineers...');
+
+  var currentSchedId = dom.scheduleSelect.value;
+  var engineerIds = Array.from(selectedIds);
+
+  // Get current link IDs for selected engineers
+  var linked = getLinkedEngineerIds(currentSchedId);
+  var linkIdsToRemove = [];
+  engineerIds.forEach(function(eid) {
+    linked.forEach(function(l) {
+      if (String(l.engineerId) === String(eid)) linkIdsToRemove.push(l.linkId);
     });
-    log('✅ Schedule Updated', 'Date/Time updated', 'success');
-  } catch(e) {
-    console.error('[APP] Reschedule update error:', e);
-    log('❌ Reschedule Error', e.message, 'error');
+  });
+
+  if (linkIdsToRemove.length === 0) {
+    showToast('No matching links found', 'error');
     hideLoader();
     return;
   }
 
-  showToast('Schedule date/time updated', 'success');
-  await loadSchedules();
-  await loadLinks();
-  dom.scheduleSelect.value = currentSchedId;
-  selectedIds.clear();
-  updateSelectionUI();
-  await findAvailableEngineers();
-  hideLoader();
+  try {
+    // STEP 1: Create or get target schedule
+    if (isNew) {
+      var schedData = {
+        Name: newSchedName,
+        Date: newDate,
+        End_time: newDate + 'T' + newTime + ':00'
+      };
+      log('📤 Creating new schedule for move', schedData, 'info');
+      var result = await apiInsertRecord(MODULES.SCHEDULES, schedData, []);
+      var success = false;
+      if (result && result.data) {
+        var recs = Array.isArray(result.data) ? result.data : result.data.data;
+        if (recs && recs.length > 0 && recs[0].code === 'SUCCESS') {
+          success = true;
+          targetSchedId = recs[0].details.id;
+          log('✅ Created schedule', 'ID: ' + targetSchedId, 'success');
+        }
+      }
+      if (!success) {
+        showToast('Failed to create new schedule', 'error');
+        hideLoader();
+        return;
+      }
+    }
+
+    // STEP 2: Remove old links
+    log('🔗 Removing old links', {count: linkIdsToRemove.length}, 'info');
+    for (var i = 0; i < linkIdsToRemove.length; i++) {
+      try {
+        await apiDeleteRecord(LINKING_MODULE, linkIdsToRemove[i]);
+      } catch(e) {
+        console.error('[APP] Remove link error:', e);
+      }
+    }
+
+    // STEP 3: Create new links to target schedule
+    log('🔗 Creating new links to schedule', targetSchedId, 'info');
+    var linkedCount = 0;
+    for (var i = 0; i < engineerIds.length; i++) {
+      try {
+        var linkData = {};
+        linkData[LINK_FIELD_SCHEDULE] = { id: targetSchedId };
+        linkData[LINK_FIELD_ENGINEER] = { id: engineerIds[i] };
+        var linkResult = await apiInsertRecord(LINKING_MODULE, linkData, []);
+        if (linkResult && linkResult.data) {
+          var linkRecs = Array.isArray(linkResult.data) ? linkResult.data : (linkResult.data.data || [linkResult.data]);
+          if (linkRecs && linkRecs.length > 0 && linkRecs[0].code === 'SUCCESS') {
+            linkedCount++;
+          }
+        }
+      } catch(e) {
+        console.error('[APP] New link error:', e);
+      }
+    }
+
+    showToast(linkedCount + ' engineer(s) moved to new schedule', 'success');
+    log('✅ Move complete', {moved: linkedCount, target: targetSchedId}, 'success');
+
+    // Refresh
+    await loadLinks();
+    await loadSchedules();
+    dom.scheduleSelect.value = targetSchedId;
+    selectedIds.clear();
+    updateSelectionUI();
+    await findAvailableEngineers();
+
+  } catch(e) {
+    console.error('[APP] Reschedule error:', e);
+    showToast('Error: ' + (e.message || 'Unknown'), 'error');
+  } finally {
+    hideLoader();
+  }
 }
 
 // ─── Availability ─────────────────────────────────────────
@@ -369,10 +479,9 @@ function renderTable(engineers, showAvailability) {
       ? '<span style="color:var(--green);font-weight:600;font-size:12px;">✓ Available</span>'
       : '<span style="color:var(--red);font-weight:600;font-size:12px;">✗ Assigned</span>';
 
-    var disabled = e._assignedToCurrent ? 'disabled' : '';
     var rowClass = checked?'selected':(isAvail?'':'unavailable');
     html += '<tr class="'+rowClass+'" data-id="'+id+'" data-available="'+(isAvail?1:0)+'">'+
-      '<td><input type="checkbox" class="eng-check" data-id="'+id+'" '+checked+' '+disabled+'></td>'+
+      '<td><input type="checkbox" class="eng-check" data-id="'+id+'" '+checked+'></td>'+
       '<td><strong>'+escapeHtml(name)+'</strong></td>'+
       '<td>'+skillTags+'</td>'+
       '<td>'+escapeHtml(pos)+'</td>'+
@@ -391,24 +500,29 @@ function renderTable(engineers, showAvailability) {
 function updateManageButtons() {
   var hasSelected = selectedIds.size > 0;
   var showAllChecked = dom.showAll && dom.showAll.checked;
+  var schedId = dom.scheduleSelect.value;
 
-  // Show both assign and unlink/reschedule buttons when in showAll mode
-  if (hasSelected && showAllChecked) {
+  // Check if any selected engineer is assigned to the current schedule
+  var hasAssignedSelected = false;
+  if (schedId && hasSelected) {
+    var linked = getLinkedEngineerIds(schedId);
+    var linkedIds = linked.map(function(l) { return l.engineerId; });
+    selectedIds.forEach(function(id) {
+      if (linkedIds.indexOf(String(id)) !== -1) { hasAssignedSelected = true; }
+    });
+  }
+
+  if (hasSelected) {
     dom.btnAssign.style.display = 'inline-block';
-    dom.btnUnlink.style.display = 'inline-block';
-    dom.btnReschedule.style.display = 'inline-block';
     dom.btnAssign.disabled = false;
-  } else if (hasSelected) {
-    // Only assign when showing available
-    dom.btnAssign.style.display = 'inline-block';
     dom.btnUnlink.style.display = 'inline-block';
-    dom.btnReschedule.style.display = 'inline-block';
-    dom.btnAssign.disabled = false;
+    // Only show reschedule if at least one selected engineer is assigned to this schedule
+    dom.btnReschedule.style.display = hasAssignedSelected ? 'inline-block' : 'none';
   } else {
     dom.btnAssign.style.display = 'inline-block';
+    dom.btnAssign.disabled = true;
     dom.btnUnlink.style.display = 'none';
     dom.btnReschedule.style.display = 'none';
-    dom.btnAssign.disabled = true;
   }
 }
 
@@ -734,7 +848,9 @@ function bindEvents() {
 
   dom.btnAssign.addEventListener('click', assignSchedule);
   dom.btnUnlink.addEventListener('click', unlinkEngineers);
-  dom.btnReschedule.addEventListener('click', rescheduleEngineers);
+  dom.btnReschedule.addEventListener('click', showRescheduleModal);
+  dom.rescheduleCancel.addEventListener('click', function() { dom.rescheduleModal.style.display = 'none'; });
+  dom.rescheduleConfirm.addEventListener('click', confirmReschedule);
 
   // Show All checkbox
   if (dom.showAll) {

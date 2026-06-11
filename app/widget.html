@@ -98,6 +98,38 @@
         <div style="margin-top:8px;font-size:12px;color:var(--text-sub);" id="manageHint"></div>
       </div>
 
+      <!-- Reschedule Modal -->
+      <div class="modal-overlay" id="rescheduleModal" style="display:none;">
+        <div class="modal">
+          <div class="modal-title">Move to Another Schedule</div>
+          <div class="modal-body">
+            <div class="filter-group full">
+              <label>Move to Existing Schedule</label>
+              <select id="rescheduleSelect">
+                <option value="">— Choose schedule —</option>
+              </select>
+            </div>
+            <div style="text-align:center;font-size:12px;color:var(--text-sub);">— or create new —</div>
+            <div class="filter-group full">
+              <label>New Schedule Name</label>
+              <input type="text" id="rescheduleName" placeholder="Enter name to create a new schedule">
+            </div>
+            <div class="filter-group">
+              <label>Date <span class="req">*</span></label>
+              <input type="date" id="rescheduleDate">
+            </div>
+            <div class="filter-group">
+              <label>End Time <span class="req">*</span></label>
+              <input type="time" id="rescheduleTime">
+            </div>
+          </div>
+          <div class="modal-actions">
+            <button class="btn-assign" id="rescheduleCancel" style="background:var(--text-sub);">Cancel</button>
+            <button class="btn-assign" id="rescheduleConfirm" style="background:var(--yellow);">Move Engineers</button>
+          </div>
+        </div>
+      </div>
+
       <!-- Discover API Names -->
       <div class="filters" style="background:#fff7ed;border-color:var(--yellow);">
         <button class="btn-filter" id="btnDiscover" style="background:var(--yellow);">Discover API Names</button>
